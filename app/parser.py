@@ -73,45 +73,50 @@ def _parse_case_type(class_attr: str) -> str | None:
 
 
 def _parse_party(td_element) -> list[CaseParty]:
+    """Parse plaintiff/respondent parties from a table cell."""
     parties = []
-    spans = td_element.xpath('.//span[@class="js-rolloverHtml"]')
-    if not spans:
-        divs = td_element.xpath('.//div')
-        for div in divs:
-            name = div.text_content().strip()
-            if name:
-                parties.append(CaseParty(name=name))
-        return parties
+    # Parties are inside span.js-rolloverHtml (hidden rollover content)
+    rollover_spans = td_element.xpath('.//span[@class="js-rolloverHtml"]')
 
-    for span in spans:
+    for span in rollover_spans:
         name = None
         inn = None
         address = None
 
-        name_el = span.xpath('.//b | .//strong | .//a')
+        # Name is in <strong> tag
+        name_el = span.xpath('.//strong')
         if name_el:
             name = name_el[0].text_content().strip()
-        else:
-            name = span.text_content().strip().split("\n")[0].strip()
 
-        rollover = span.get("data-rollover", "")
-        if rollover:
-            try:
-                roll_tree = html.fromstring(rollover)
-                text = roll_tree.text_content()
-                for line in text.split("\n"):
-                    line = line.strip()
-                    if line.isdigit() and len(line) in (10, 12):
-                        inn = line
-                        break
-                addr_spans = roll_tree.xpath('.//span[@class="js-rollover-address"]')
-                if addr_spans:
-                    address = addr_spans[0].text_content().strip()
-            except Exception:
-                pass
+        # INN is in "ИНН: XXXX" text inside a div
+        inn_divs = span.xpath('.//div')
+        for div in inn_divs:
+            text = div.text_content().strip()
+            if text.startswith("ИНН:"):
+                inn = text.replace("ИНН:", "").strip()
+                break
+
+        # Address is plain text between <br/> and the INN div
+        # Get all text content, remove name and INN parts
+        full_text = span.text_content()
+        lines = [l.strip() for l in full_text.split("\n") if l.strip()]
+        # Address is usually the second non-empty line (after name)
+        for line in lines:
+            if line != name and not line.startswith("ИНН:") and len(line) > 10:
+                address = line
+                break
 
         if name:
             parties.append(CaseParty(name=name, inn=inn, address=address))
+
+    # Fallback: if no rollover spans, try to get names from visible text
+    if not rollover_spans:
+        visible_spans = td_element.xpath('.//span[@class="js-rollover b-newRollover"]')
+        for vs in visible_spans:
+            # Get only direct text, not children
+            text = vs.text_content().strip().split("\n")[0].strip()
+            if text:
+                parties.append(CaseParty(name=text))
 
     return parties
 
@@ -133,15 +138,21 @@ def _parse_search_results(html_content: str) -> tuple[list[ArbitrationCase], int
         except (ValueError, IndexError):
             pass
 
-    # Try with class first, then fallback to all tr with td.num
-    rows = tree.xpath('//tr[contains(@class, "b-container")]')
-    if not rows:
-        rows = tree.xpath('//tr[td[@class="num"]]')
+    # Find rows: either by class or by presence of td.num
+    rows = tree.xpath('//tr[td[@class="num"]]')
     for row in rows:
         try:
-            url_el = row.xpath('.//td[1]//a/@href')
+            # Case number and URL from td.num
+            num_td = row.xpath('.//td[@class="num"]')
+            if not num_td:
+                continue
+
+            url_el = num_td[0].xpath('.//a[@class="num_case"]/@href')
+            if not url_el:
+                url_el = num_td[0].xpath('.//a/@href')
             if not url_el:
                 continue
+
             case_path = url_el[0]
             case_id = case_path.split("/")[-1] if "/" in case_path else case_path
             if case_path.startswith("http"):
@@ -149,27 +160,47 @@ def _parse_search_results(html_content: str) -> tuple[list[ArbitrationCase], int
             else:
                 case_url = f"{KAD_BASE}{case_path}"
 
-            num_el = row.xpath('.//td[1]//a/text()')
+            num_el = num_td[0].xpath('.//a[@class="num_case"]/text()')
+            if not num_el:
+                num_el = num_td[0].xpath('.//a/text()')
             case_number = num_el[0].strip() if num_el else ""
 
-            type_el = row.xpath('.//td[1]//span[contains(@class,"type")]/@class')
-            case_type = _parse_case_type(type_el[0]) if type_el else None
+            # Case type from div class (civil/bankrupt/adm)
+            type_div = num_td[0].xpath('.//div[@class="b-container"]/div/@class')
+            case_type = _parse_case_type(type_div[0]) if type_div else None
 
-            court_el = row.xpath('.//td[2]//text()')
-            court = " ".join(t.strip() for t in court_el).strip() or None
+            # Entry date from the type div's span or title
+            entry_date = None
+            date_span = num_td[0].xpath('.//div[@class="b-container"]/div/span/text()')
+            if date_span:
+                entry_date = date_span[0].strip()
 
-            judge_el = row.xpath('.//td[3]//text()')
-            judge = " ".join(t.strip() for t in judge_el).strip() or None
+            # Court and judge from td.court
+            court = None
+            judge = None
+            court_td = row.xpath('.//td[@class="court"]')
+            if court_td:
+                judge_el = court_td[0].xpath('.//div[@class="judge"]/text()')
+                judge = judge_el[0].strip() if judge_el else None
+                # Court name is in a div without the "judge" class
+                court_divs = court_td[0].xpath(
+                    './/div[@class="b-container"]/div[not(@class="judge")]/@title'
+                )
+                court = court_divs[0].strip() if court_divs else None
 
-            date_el = row.xpath('.//td[1]//span[contains(@class,"num_case")]//span/text()')
-            entry_date = date_el[0].strip() if date_el else None
-
-            tds = row.xpath('.//td')
+            # Plaintiffs from td.plaintiff
             plaintiffs = []
+            plaintiff_td = row.xpath('.//td[@class="plaintiff"]')
+            if plaintiff_td:
+                plaintiffs = _parse_party(plaintiff_td[0])
+
+            # Respondents from td.respondent (might also be just next td)
             respondents = []
-            if len(tds) >= 5:
-                plaintiffs = _parse_party(tds[3])
-                respondents = _parse_party(tds[4])
+            respondent_td = row.xpath(
+                './/td[@class="respondent"] | .//td[@class="defendant"]'
+            )
+            if respondent_td:
+                respondents = _parse_party(respondent_td[0])
 
             cases.append(ArbitrationCase(
                 case_id=case_id,
@@ -383,9 +414,6 @@ async def search_cases_by_inn(inn: str) -> list[ArbitrationCase]:
                         search_responses.append(body)
                         response_received.set()
                         logger.info("Captured SearchInstances response: %d bytes", len(body))
-                        # Log first row HTML for debugging parser
-                        if not all_cases:
-                            logger.info("HTML sample (first 2000): %s", body[:2000])
                     else:
                         logger.warning("SearchInstances %s, body_len=%d",
                                        response.status, len(body))
