@@ -351,6 +351,9 @@ async def search_cases_by_inn(inn: str) -> list[ArbitrationCase]:
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
+                "--enable-unsafe-swiftshader",
+                "--enable-webgl",
+                "--ignore-gpu-blocklist",
             ],
         )
         context = await browser.new_context(
