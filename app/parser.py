@@ -351,7 +351,6 @@ async def search_cases_by_inn(inn: str) -> list[ArbitrationCase]:
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
-                "--disable-gpu",
             ],
         )
         context = await browser.new_context(
@@ -367,6 +366,18 @@ async def search_cases_by_inn(inn: str) -> list[ArbitrationCase]:
         # Log browser console messages and errors
         page.on("console", lambda msg: logger.info("CONSOLE [%s]: %s", msg.type, msg.text))
         page.on("pageerror", lambda exc: logger.error("PAGE ERROR: %s", exc.message))
+
+        # Monitor network responses for SearchInstances
+        async def _on_response(response):
+            url = response.url
+            if "SearchInstances" in url or "Recaptcha" in url:
+                try:
+                    body = await response.text()
+                    logger.info("NETWORK %s %s body_len=%d first200=%s",
+                                response.status, url, len(body), body[:200])
+                except Exception:
+                    logger.info("NETWORK %s %s (no body)", response.status, url)
+        page.on("response", _on_response)
 
         try:
             # Step 1: Navigate to kad.arbitr.ru
