@@ -493,7 +493,7 @@ async def search_cases_by_inn(inn: str) -> list[ArbitrationCase]:
                             total_pages, len(cases))
 
                 # Step 5: Pagination - click next page buttons via JS
-                for page_num in range(2, min(total_pages + 1, 20)):
+                for page_num in range(2, min(total_pages + 1, 100)):
                     await asyncio.sleep(REQUEST_DELAY)
 
                     response_received.clear()
