@@ -346,14 +346,12 @@ async def search_cases_by_inn(inn: str) -> list[ArbitrationCase]:
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=True,
+            headless=False,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
-                "--enable-unsafe-swiftshader",
-                "--enable-webgl",
-                "--ignore-gpu-blocklist",
+                "--disable-gpu",
             ],
         )
         context = await browser.new_context(
