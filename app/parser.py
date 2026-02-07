@@ -144,7 +144,10 @@ def _parse_search_results(html_content: str) -> tuple[list[ArbitrationCase], int
                 continue
             case_path = url_el[0]
             case_id = case_path.split("/")[-1] if "/" in case_path else case_path
-            case_url = f"{KAD_BASE}{case_path}"
+            if case_path.startswith("http"):
+                case_url = case_path
+            else:
+                case_url = f"{KAD_BASE}{case_path}"
 
             num_el = row.xpath('.//td[1]//a/text()')
             case_number = num_el[0].strip() if num_el else ""
@@ -380,6 +383,9 @@ async def search_cases_by_inn(inn: str) -> list[ArbitrationCase]:
                         search_responses.append(body)
                         response_received.set()
                         logger.info("Captured SearchInstances response: %d bytes", len(body))
+                        # Log first row HTML for debugging parser
+                        if not all_cases:
+                            logger.info("HTML sample (first 2000): %s", body[:2000])
                     else:
                         logger.warning("SearchInstances %s, body_len=%d",
                                        response.status, len(body))
